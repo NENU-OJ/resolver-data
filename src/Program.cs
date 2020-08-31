@@ -1,5 +1,5 @@
-﻿using MySql.Data.MySqlClient;
-using CommandLine;
+﻿using CommandLine;
+using MySql.Data.MySqlClient;
 using Serilog;
 using System;
 using System.Collections.Generic;
@@ -60,7 +60,7 @@ namespace Resolver
     {
         private MySqlConnection conn;
 
-        private Dictionary<string, User> getUsers(int contestId)
+        private Dictionary<string, User> GetUsers(int contestId)
         {
             var query = $"select t_user.id, t_user.nickname, t_user.school, t_contest_user.is_star " +
                 $"from t_contest_user join t_user on t_contest_user.user_id = t_user.id " +
@@ -71,19 +71,23 @@ namespace Resolver
             var users = new Dictionary<string, User>();
             while (dataReader.Read())
             {
-                var user = new User();
-                user.Name = dataReader["nickname"].ToString();
-                user.College = (string.IsNullOrEmpty(dataReader["school"].ToString()) ? "知名大学" : dataReader["school"].ToString()).ToUpper();
-                user.IsExclude = (bool)dataReader["is_star"];
+                var user = new User
+                {
+                    Name = dataReader["nickname"].ToString(),
+                    College = (string.IsNullOrEmpty(dataReader["school"].ToString()) ? "知名大学" : dataReader["school"].ToString()).ToUpper(),
+                    IsExclude = (bool)dataReader["is_star"]
+                };
 
                 string id = dataReader["id"].ToString();
                 users[id] = user;
             }
             dataReader.Close();
+
+            Log.Information($"Get {users.Count} users");
             return users;
         }
 
-        private Dictionary<int, int> getProblemsMap(int contestId)
+        private Dictionary<int, int> GetProblemsMap(int contestId)
         {
             var query = $"select problem_id, lable from t_contest_problem where contest_id = {contestId}";
             var cmd = new MySqlCommand(query, conn);
@@ -98,6 +102,13 @@ namespace Resolver
             }
 
             dataReader.Close();
+
+            Log.Information($"Get {problems.Count} problems");
+            foreach (var kv in problems)
+            {
+                Log.Information($"problem ID of {kv.Value} is {kv.Key}");
+            }
+
             return problems;
         }
 
@@ -112,16 +123,20 @@ namespace Resolver
                 throw new Exception($"No such contest: {contestId}");
             }
 
-            var contest = new Contest();
-            contest.Id = contestId;
-            contest.Title = dataReader["title"].ToString();
-            contest.StartTime = ((DateTimeOffset)((DateTime)dataReader["start_time"])).ToUnixTimeSeconds();
+            var contest = new Contest
+            {
+                Id = contestId,
+                Title = dataReader["title"].ToString(),
+                StartTime = ((DateTimeOffset)((DateTime)dataReader["start_time"])).ToUnixTimeSeconds()
+            };
 
             dataReader.Close();
+
+            Log.Information($"Contest title: {contest.Title}, start time: {contest.StartTime}");
             return contest;
         }
 
-        private (int, Dictionary<string, Solution>) getSolutions(int contestId)
+        private (int, Dictionary<string, Solution>) GetSolutions(int contestId)
         {
             HashSet<string> failedResults = new HashSet<string> {
                 "Wrong Answer",
@@ -132,7 +147,7 @@ namespace Resolver
                 "Runtime Error",
                 "Restricted Function"
             };
-            var problemsMap = getProblemsMap(contestId);
+            var problemsMap = GetProblemsMap(contestId);
             var contest = GetContest(contestId);
 
             var query = $"select id, problem_id, result, user_id, submit_time from t_status where contest_id = {contestId}";
@@ -159,18 +174,22 @@ namespace Resolver
 
         public ResolverData GetResolverData(string host, int port, string user, string passwd, int contestId)
         {
-            conn = new MySqlConnection();
-            conn.ConnectionString = $"server={host};port={port};uid={user};pwd={passwd};database=db_nenu_oj";
+            conn = new MySqlConnection
+            {
+                ConnectionString = $"server={host};port={port};uid={user};pwd={passwd};database=db_nenu_oj"
+            };
             conn.Open();
 
-            var users = getUsers(contestId);
-            var (problemCount, solutions) = getSolutions(contestId);
+            var users = GetUsers(contestId);
+            var (problemCount, solutions) = GetSolutions(contestId);
             conn.Close();
 
-            var contest = new ResolverData();
-            contest.ProblemCount = problemCount;
-            contest.Users = users;
-            contest.Solutions = solutions;
+            var contest = new ResolverData
+            {
+                ProblemCount = problemCount,
+                Users = users,
+                Solutions = solutions
+            };
             return contest;
         }
     }
@@ -180,7 +199,7 @@ namespace Resolver
         [Option('h', "host", Required = true, HelpText = "Set database host to connect.")]
         public string Host { get; set; }
 
-        [Option('P', "port", Required = true, HelpText = "Set database port to connect.")]
+        [Option('P', "port", Required = false, Default = 3306, HelpText = "Set database port to connect.")]
         public int Port { get; set; }
 
         [Option('u', "user", Required = true, HelpText = "Set database user to connect.")]
@@ -191,6 +210,9 @@ namespace Resolver
 
         [Option('c', "contest", Required = true, HelpText = "Set contest ID.")]
         public int ContestID { get; set; }
+
+        [Option('o', "output", Required = false, Default = "contest.json", HelpText = "Set file to output.")]
+        public string Output { get; set; }
     }
 
     class Program
@@ -217,7 +239,10 @@ namespace Resolver
             var contestData = dbHandler.GetResolverData(options.Host, options.Port, options.User, "db_nenu_oj", options.ContestID);
 
             var json = JsonSerializer.Serialize(contestData);
-            System.IO.File.WriteAllText(@"contest.json", json);
+
+            System.IO.File.WriteAllText(options.Output, json);
+            Log.Information($"Write resolver data to {options.Output} successfully");
+            Log.CloseAndFlush();
         }
     }
 }
